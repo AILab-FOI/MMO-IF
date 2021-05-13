@@ -3,6 +3,9 @@ import asyncio
 import os
 import tempfile
 import pexpect as px
+import sys
+
+from avatar import Avatar
 
 GAME_FILE_NAME = "rooms.gblorb"
 
@@ -20,6 +23,8 @@ EXIT_COMMANDS = ["quit", "exit"]
 
 ROOM_SELECTION_PATTERN = 'You entered (.*) room'
 MESSAGE_PARAMS_PATTERN = '@([^\s]+) (.*)'
+
+agent = None
 
 def get_room_name(response):
     if match := re.search(ROOM_SELECTION_PATTERN, response, re.IGNORECASE):
@@ -41,14 +46,18 @@ def clean(string):
     string = asc_re.sub(r"", string)
     return eval(string).decode()
 
-def change_location(response):
+async def change_location(response):
     location = get_room_name(response)
 
-    if not location is None:
-        global current_location
+    global current_location
+    if not location is None and not location is current_location:
         current_location = location
 
-def print_game_response():
+        loop = asyncio.get_event_loop()
+        loop.create_task(agent.send_location(location))
+        await asyncio.sleep(1)
+
+async def print_game_response():
     global game, last, llast
 
     game.sendline(" ")
@@ -65,7 +74,7 @@ def print_game_response():
             if l[0] == ">":
                 continue
 
-            change_location(l)
+            await change_location(l)
             print(l)
             llast = m
     f.close()
@@ -82,42 +91,52 @@ def start_game(file_name):
     game.setecho(False)
 
 
-def send_message_to_player(command):
+async def send_message_to_player(command):
     try:
-        (player, message) = get_message_params('@everyone asd')
-
-        print(f'Sending message to {player} with content {message}')
+        (player, message) = get_message_params(command)        
+        await agent.send_msg(player, message)
     except:
         pass
 
-def process_command(command):
-    # is exit command?
-    if command in EXIT_COMMANDS:
-        return True
-
+async def process_command(command):
     # is communication
     if command.startswith('@'):
-        send_message_to_player(command)
+        await send_message_to_player(command)
 
-        return False
+        return
 
     # process valid commands    
     game.sendline(command)
 
-    return False
-
-async def main():
+async def main(jid, password):
     start_game(GAME_FILE_NAME)
 
+    global agent
+    agent = Avatar(
+        jid,
+        password
+    )
+    agent.start()
+    # wait for agent to start up
+    await asyncio.sleep(3)
+
+    loop = asyncio.get_event_loop()
     while True:
-        print_game_response()
+        await print_game_response()
         cmd = input()
 
-        should_exit = process_command(cmd.lower())
-
-        if should_exit:
+        if cmd in EXIT_COMMANDS:
             break
 
+        loop.create_task(process_command(cmd.lower()))
+        await asyncio.sleep(1)
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    if len(sys.argv) == 3:
+        jid = sys.argv[1]
+        password = sys.argv[2]
+
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(main(jid, password))
     
