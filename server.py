@@ -1,5 +1,5 @@
 from spade.agent import Agent
-from spade.behaviour import CyclicBehaviour
+from spade.behaviour import CyclicBehaviour, OneShotBehaviour
 from spade.message import Message
 from spade.template import Template
 import time
@@ -11,6 +11,20 @@ class Server(Agent):
         super().__init__( name, password )
         
         self.players = {}
+
+    class PresenceSetup(OneShotBehaviour):
+        def on_subscribe(self, jid):
+            self.presence.approve(jid)
+            self.presence.subscribe(jid)
+
+        def on_unsubscribe(self, jid):
+            self.presence.approve(jid)
+
+        async def run(self):
+            self.presence.on_subscribe = self.on_subscribe
+            self.presence.on_unsubscribe = self.on_unsubscribe
+            
+            self.presence.set_available()
 
     class ForwardMessage(CyclicBehaviour):
         async def run(self):
@@ -28,6 +42,9 @@ class Server(Agent):
                 return
 
             for player in self.agent.players:
+                if not player in self.agent.get_contacts_simple():
+                    continue
+
                 player_location = self.agent.players[player]
 
                 if player_location == sender_location and not player == sender:
@@ -50,6 +67,9 @@ class Server(Agent):
             self.agent.players[current_player] = current_location
 
             for player in self.agent.players:
+                if not player in self.agent.get_contacts_simple():
+                    continue
+
                 player_location = self.agent.players[player]
 
                 if player_location == current_location and not player == current_player:
@@ -59,6 +79,8 @@ class Server(Agent):
                     await self.send(msg)
 
     async def setup(self):
+        self.add_behaviour(self.PresenceSetup())
+
         self.forward_template = Template()
         self.forward_template.set_metadata('action','send_message')
         self.add_behaviour(self.ForwardMessage(), self.forward_template)
@@ -67,7 +89,16 @@ class Server(Agent):
         self.location_template.set_metadata('action','location')
         self.add_behaviour(self.LocationChange(), self.location_template)
 
+    def get_contacts_simple(self):
+        return [
+            str(jid)
+            for jid in self.presence.get_contacts().keys() 
+        ]
+
     def stop(self):
+        for contact in self.presence.get_contacts().keys():
+            self.presence.unsubscribe(str(contact))
+
         super().stop()
 
 if __name__ == '__main__':

@@ -1,22 +1,14 @@
 import re
 import asyncio
-import os
-import tempfile
 import pexpect as px
 import sys
+from glulxe.interface import i7Game
 
 from avatar import Avatar
 
 GAME_FILE_NAME = "rooms.gblorb"
 
-asc_re = re.compile(r"\\x[0-9a-h\)\[;rml\?HJM]+")
-tmpdir = tempfile._get_default_tempdir()
-tmpfile = os.path.join(tmpdir, next(tempfile._get_candidate_names()))
-
 game = None
-last = 0
-llast = 0
-
 current_location = None
 
 EXIT_COMMANDS = ["quit", "exit"]
@@ -41,11 +33,6 @@ def get_message_params(response):
 
     return None
 
-def clean(string):
-    string = string.replace(r"\r", r"\n")
-    string = asc_re.sub(r"", string)
-    return eval(string).decode()
-
 async def change_location(response):
     location = get_room_name(response)
 
@@ -57,43 +44,9 @@ async def change_location(response):
         loop.create_task(agent.send_location(location))
         await asyncio.sleep(1)
 
-async def print_game_response():
-    global game, last, llast
-
-    game.sendline(" ")
-    f = open(tmpfile, "rb")
-    new = [x for x in enumerate(f.readlines())][last:]
-    for n, i in new:
-        line = clean(str(i)).split("\n")
-        previous = ""
-        exline = [i for i in enumerate(line)][llast + 1 :]
-        for m, l in exline:
-            if "I beg your pardon?" in l and previous == "> ":
-                continue
-            previous = l
-            if l[0] == ">":
-                continue
-
-            await change_location(l)
-            print(l)
-            llast = m
-    f.close()
-    f.close()
-
-    print("\n")
-
-def start_game(file_name):
-    file = open(tmpfile, "wb")
-    file.close()
-
-    global game
-    game = px.spawn("/bin/bash -c 'glulxe \"%s\" > %s'" % (file_name, tmpfile))
-    game.setecho(False)
-
-
 async def send_message_to_player(command):
     try:
-        (player, message) = get_message_params(command)        
+        (player, message) = get_message_params(command)
         await agent.send_msg(player, message)
     except:
         pass
@@ -105,12 +58,13 @@ async def process_command(command):
 
         return
 
-    # process valid commands    
-    game.sendline(command)
+    output = game.next(command)
+    print(output)
+    # location change
+    if 'west' in command or 'east' in command or 'north' in command or 'south' in command:
+        await change_location(output)
 
-async def main(jid, password):
-    start_game(GAME_FILE_NAME)
-
+async def start_agent(jid, password):
     global agent
     agent = Avatar(
         jid,
@@ -118,19 +72,28 @@ async def main(jid, password):
     )
     agent.start()
     # wait for agent to start up
-    await asyncio.sleep(3)
+    await asyncio.sleep(2)
+
+async def start_game():
+    global game
+    game = i7Game(GAME_FILE_NAME, interactive=False)
+    intro = game.intro()
+    print(intro)
+    await change_location(intro)
+
+async def main(jid, password):
+    await start_agent(jid, password)
+    await start_game()
 
     loop = asyncio.get_event_loop()
     while True:
-        await print_game_response()
-        cmd = input()
+        cmd = input('--> ')
 
         if cmd in EXIT_COMMANDS:
             break
 
         loop.create_task(process_command(cmd.lower()))
         await asyncio.sleep(1)
-
 
 if __name__ == "__main__":
     if len(sys.argv) == 3:
